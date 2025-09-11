@@ -1,2 +1,2 @@
 # TestTailor
-The replication package of TestTailor》
+The replication package of TestTailor.
