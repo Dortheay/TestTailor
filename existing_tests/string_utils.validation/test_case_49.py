@@ -1,0 +1,26 @@
+import unittest
+import timeout_decorator
+import string_utils.validation as module_0
+
+class Test_Validation_50(unittest.TestCase):
+    @timeout_decorator.timeout(5)
+    def test_case_39(self):
+        str_0 = '255.200.100.75'
+        bool_0 = module_0.is_ip(str_0)
+        str_1 = '255.200.100.999'
+        bool_1 = module_0.is_ip(str_1)
+        str_2 = '2001:db8:85a3:0000:0000:8a2e:370:7334'
+        bool_2 = module_0.is_ip(str_2)
+        str_3 = '2001:db8:85a3:0000:0000:8a2e:370:?'
+        bool_3 = module_0.is_ip(str_3)
+        str_4 = '1.2.3'
+        bool_4 = module_0.is_ip(str_4)
+        str_5 = 'invalid_ip'
+        bool_5 = module_0.is_ip(str_5)
+        str_6 = ''
+        bool_6 = module_0.is_ip(str_6)
+        var_0 = None
+        bool_7 = module_0.is_ip(var_0)
+
+if __name__ == "__main__":
+    unittest.main()
