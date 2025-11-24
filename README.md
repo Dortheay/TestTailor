@@ -1,4 +1,4 @@
-# TestTailor: Automated Test Case Generation with LLM
+# TestTailor Replication Package v1.0
 
 TestTailor is an automated test case generation system that uses static analysis, coverage analysis, similarity matching, and LLM-based generation to create high-quality test cases for Python code.
 
