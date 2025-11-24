@@ -13,7 +13,7 @@ Note: `ast` is a built-in Python module, no installation needed.
 ## Quick Start
 
 ### Step 0: The replication data of our experiements
-Please refer to (google drive)[https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=sharing]
+Please refer to [google drive](https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=sharing)
 
 ### Step 1: Coverage Analysis
 
