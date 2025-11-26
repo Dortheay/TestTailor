@@ -210,8 +210,3 @@ class CoverageDataCollector:
         except Exception as e:
             print(f"Failed to analyze executable lines for {file_path}: {e}")
             return []
-
-# The rest of the code (UncoveredCodeAnalyzer, CoverageReportGenerator, EnhancedCoverageAnalyzer, main, etc.) would follow similarly:
-# - Replace print messages with English.
-# - Replace paths with placeholders like "<source_dir>" and "<test_dir>" if needed.
-# - Keep comments in English or remove.

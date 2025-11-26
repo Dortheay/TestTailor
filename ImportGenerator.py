@@ -1,147 +1,192 @@
-import os
-import re
+"""
+Import Generator Tool
+
+This module provides functionality to scan a directory for Python files,
+extract import statements, resolve aliases, and generate a consolidated,
+duplicate-free list of imports.
+
+Usage:
+    python import_generator.py /path/to/your/tests --output unique_imports.py
+"""
+
 import ast
+import argparse
+import os
+import sys
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 
 
 class ImportGenerator:
-    def __init__(self, test_folder_path: str):
+    """Generates a unique set of import statements from a directory of Python files."""
+
+    def __init__(self, target_folder_path: str):
         """
-        初始化 ImportGenerator 类
-        
+        Initializes the ImportGenerator.
+
         Args:
-            test_folder_path: 测试文件夹的路径
+            target_folder_path: The root directory to scan for Python files.
         """
-        self.test_folder_path = test_folder_path
-        self.import_statements = set()  # 存储最终的 import 语句
-        self.module_aliases = defaultdict(set)  # 存储模块及其别名的映射
-        self.used_aliases = set()  # 存储已使用的别名
-    
-    def process_test_files(self) -> List[str]:
+        self.target_folder_path = target_folder_path
+        # Stores fully formatted 'from ... import ...' statements
+        self.import_statements: Set[str] = set()
+        # Maps module names to a set of aliases found in the code
+        self.module_aliases: Dict[str, Set[str]] = defaultdict(set)
+        # Tracks aliases that have already been assigned to avoid conflicts
+        self.used_aliases: Set[str] = set()
+
+    def process_files(self) -> List[str]:
         """
-        处理测试文件夹中的所有 Python 文件，提取并去重 import 语句
-        
+        Scans all Python files in the target directory, extracts imports,
+        and returns a sorted list of unique import statements.
+
         Returns:
-            去重后的 import 语句列表
+            A list of unique, valid Python import strings.
         """
-        for root, _, files in os.walk(self.test_folder_path):
+        if not os.path.exists(self.target_folder_path):
+            print(f"Error: Directory not found: {self.target_folder_path}", file=sys.stderr)
+            return []
+
+        for root, _, files in os.walk(self.target_folder_path):
             for file in files:
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
                     self._extract_imports_from_file(file_path)
-        
+
         return self._generate_unique_imports()
-    
+
     def _extract_imports_from_file(self, file_path: str) -> None:
         """
-        从单个文件中提取 import 语句
-        
+        Parses a single Python file using AST to extract import statements.
+
         Args:
-            file_path: 文件路径
+            file_path: The absolute path to the Python file.
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 file_content = f.read()
-            
-            # 使用 AST 解析 Python 文件
+
             tree = ast.parse(file_content)
-            
+
             for node in ast.walk(tree):
-                # 处理 import xxx 形式
+                # Handle: import xxx [as yyy]
                 if isinstance(node, ast.Import):
                     for name in node.names:
                         module_name = name.name
+                        # If no alias is provided, the alias is the module name (or last part of it)
                         alias = name.asname or module_name.split('.')[-1]
                         
                         self.module_aliases[module_name].add(alias)
                         self.used_aliases.add(alias)
-                
-                # 处理 from xxx import yyy 形式
+
+                # Handle: from xxx import yyy [as zzz]
                 elif isinstance(node, ast.ImportFrom):
-                    if node.module is not None:  # 排除 from . import xxx 的情况
+                    # node.module is None for relative imports (e.g., 'from . import func')
+                    # We exclude these as they may not work in the generated standalone context
+                    if node.module is not None:
                         module_name = node.module
                         for name in node.names:
                             imported_name = name.name
                             alias = name.asname or imported_name
-                            
+
                             import_str = f"from {module_name} import {imported_name}"
                             if name.asname:
                                 import_str += f" as {alias}"
-                            
+
                             self.import_statements.add(import_str)
                             self.used_aliases.add(alias)
-        
+
+        except SyntaxError:
+            print(f"Skipping file due to syntax error: {file_path}", file=sys.stderr)
         except Exception as e:
-            print(f"Error processing file {file_path}: {e}")
-    
+            print(f"Error processing file {file_path}: {e}", file=sys.stderr)
+
     def _generate_unique_imports(self) -> List[str]:
         """
-        生成去重后的 import 语句
-        
+        Resolves alias conflicts and generates the final list of import statements.
+
         Returns:
-            去重后的 import 语句列表
+            A sorted list of import statements.
         """
         result = list(self.import_statements)
-        
-        # 跟踪已使用的别名，避免重复
-        used_aliases = set()
+
+        # Local tracking for this generation phase to resolve conflicts
+        resolved_aliases = set()
         alias_counter = defaultdict(int)
-        
-        # 处理 import xxx as yyy 形式的语句
-        for module, aliases in sorted(self.module_aliases.items()):  # 排序以确保结果一致性
-            # 如果有多个别名，选择一个（优先选择与模块名最后一部分相同的别名）
+
+        # Process 'import xxx' style imports
+        # Sorting ensures deterministic output
+        for module, aliases in sorted(self.module_aliases.items()):
+            # Logic: If multiple aliases exist for a module, prioritize the one 
+            # that matches the module's name (last segment).
             preferred_alias = module.split('.')[-1]
-            
-            # 如果首选别名在别名集合中且未被使用，使用它
-            if preferred_alias in aliases and preferred_alias not in used_aliases:
+
+            if preferred_alias in aliases and preferred_alias not in resolved_aliases:
                 chosen_alias = preferred_alias
             else:
-                # 如果首选别名已被使用或不在别名集合中
-                # 生成一个唯一的别名
+                # Fallback: Generate a unique alias if the preferred one is taken
                 base_alias = module.split('.')[-1]
                 chosen_alias = base_alias
-                
-                # 如果别名已被使用，添加数字后缀
-                if chosen_alias in used_aliases:
+
+                # Increment counter until a unique alias is found
+                if chosen_alias in resolved_aliases:
                     alias_counter[base_alias] += 1
                     chosen_alias = f"{base_alias}_{alias_counter[base_alias]}"
-            
-            used_aliases.add(chosen_alias)
-            
-            # 构建 import 语句
+
+            resolved_aliases.add(chosen_alias)
+
+            # Construct the final statement
+            # If the alias matches the module name, no 'as' keyword is needed
             if chosen_alias == module.split('.')[-1]:
                 result.append(f"import {module}")
             else:
                 result.append(f"import {module} as {chosen_alias}")
-        
-        # 排序以保持一致性
+
         return sorted(result)
 
-    
     def save_imports_to_file(self, output_file: str) -> None:
         """
-        将去重后的 import 语句保存到文件
-        
+        Generates imports and writes them to a file.
+
         Args:
-            output_file: 输出文件路径
+            output_file: Path to the output file.
         """
-        imports = self.process_test_files()
-        with open(output_file, 'w', encoding='utf-8') as f:
-            for import_stmt in imports:
-                f.write(f"{import_stmt}\n")
+        imports = self.process_files()
+        
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write("# Auto-generated import list\n\n")
+                for import_stmt in imports:
+                    f.write(f"{import_stmt}\n")
+            print(f"Successfully saved {len(imports)} imports to {output_file}")
+        except IOError as e:
+            print(f"Error writing to output file: {e}", file=sys.stderr)
+
+
+def main():
+    """Main entry point for command line usage."""
+    parser = argparse.ArgumentParser(description="Extract and consolidate imports from a Python project.")
+    
+    parser.add_argument(
+        "target_dir", 
+        help="Path to the directory containing Python files to scan."
+    )
+    parser.add_argument(
+        "--output", "-o",
+        default="consolidated_imports.py",
+        help="Path for the output file (default: consolidated_imports.py)"
+    )
+
+    args = parser.parse_args()
+
+    # Normalize path
+    target_path = os.path.abspath(args.target_dir)
+
+    generator = ImportGenerator(target_path)
+    
+    # Save to file
+    generator.save_imports_to_file(args.output)
 
 
 if __name__ == "__main__":
-    # 创建 ImportGenerator 实例
-    generator = ImportGenerator("/path/to/project/tests")
-    
-    # 处理测试文件并获取去重后的 import 语句
-    unique_imports = generator.process_test_files()
-    
-    # 打印去重后的 import 语句
-    for import_stmt in unique_imports:
-        print(import_stmt)
-    
-    # 或者保存到文件
-    # generator.save_imports_to_file("unique_imports.py")
+    main()
