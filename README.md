@@ -1,7 +1,5 @@
 # TestTailor Replication Package v1.0
 
-TestTailor is an automated test case generation system that uses static analysis, coverage analysis, similarity matching, and LLM-based generation to create high-quality test cases for Python code.
-
 
 ## Installation
 
@@ -12,8 +10,11 @@ Note: `ast` is a built-in Python module, no installation needed.
 
 ## Quick Start
 
-### Step 0: The replication data of our experiements
-Please refer to [google drive](https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=sharing)
+### Step 0: The replication data of our experiments
+
+Due to the substantial size of the dataset, we have hosted the replication package on Google Drive. We strictly adhere to the double-blind policy: this link is configured for anonymous access, ensuring mutual anonymity—authors cannot track reviewer access, and reviewers cannot see author identities. The only name within the drive has been replaced with pseudonyms.
+
+Please refer to [Google Drive](https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=sharing)
 
 ### Step 1: Coverage Analysis
 
@@ -106,7 +107,7 @@ Source Code
     ↓
 [Coverage Analysis] → Uncovered code blocks → test_suggestions.json
     ↓
-[Similarity Analysis] → Similar test cases → similarity_analysis.json
+[Similarity Analysis] → Path-proximal test cases → similarity_analysis.json
     ↓
 [LLM Generation] → Generate test code → Execute & validate
     ↓
