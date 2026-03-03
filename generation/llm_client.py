@@ -132,3 +132,9 @@ def extract_code(response_text: str) -> Optional[str]:
     if stripped.startswith(("import ", "from ", "class ", "def ", "#")):
         return stripped
     return None
+
+if __name__ == "__main__":
+    config = TestTailorConfig()
+    llm_client = LLMClient(config)
+    response = llm_client.complete("Write a Python function that prints 'Hello, World!'")
+    print(response)

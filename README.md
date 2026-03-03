@@ -111,12 +111,14 @@ For each unit, up to `max_iterations_per_unit = 3`:
 ### Command Line
 
 ```bash
+export OPENAI_API_KEY="sk-..."           
+export OPENAI_API_BASE="https://api.openai.com/v1"  
+
 python -m testtailor.main \
     --module  path/to/module.py \
     --tests   path/to/initial_tests/ \
     --project path/to/project_root \
     --model   gpt-4o-2024-11-20 \
-    --api-key sk-... \
     --max-iter 3 \
     --output  testtailor_output/
 ```
@@ -124,13 +126,14 @@ python -m testtailor.main \
 For DeepSeek-V3:
 
 ```bash
+export OPENAI_API_KEY="<deepseek-key>"
+export OPENAI_API_BASE="https://api.deepseek.com"
+
 python -m testtailor.main \
     --module  path/to/module.py \
     --tests   path/to/initial_tests/ \
     --project path/to/project_root \
-    --model   deepseek-chat \
-    --api-key <deepseek-key> \
-    --api-base https://api.deepseek.com
+    --model   deepseek-chat
 ```
 
 ### Python API
@@ -138,9 +141,9 @@ python -m testtailor.main \
 ```python
 from testtailor import TestTailorConfig, run_testtailor
 
+# 推荐：依赖环境变量 OPENAI_API_KEY / OPENAI_API_BASE
 config = TestTailorConfig(
     llm_model="gpt-4o-2024-11-20",
-    api_key="sk-...",
     max_iterations_per_unit=3,
 )
 

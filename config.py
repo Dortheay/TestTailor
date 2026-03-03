@@ -1,6 +1,7 @@
 """
 TestTailor Configuration
 """
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -11,8 +12,12 @@ class TestTailorConfig:
     llm_model: str = "gpt-4o-2024-11-20"
     llm_temperature: float = 1.0
     llm_max_tokens: int = 4096
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None  # for DeepSeek or custom endpoints
+    api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("OPENAI_API_KEY")
+    )
+    api_base: Optional[str] = field(
+        default_factory=lambda: os.getenv("OPENAI_API_BASE")
+    )
 
     # Execution settings
     max_iterations_per_unit: int = 3       # max repair iterations per uncovered unit
