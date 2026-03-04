@@ -9,8 +9,12 @@ yielding compact yet complete runtime paths.
 import sys
 import os
 import threading
+import argparse
+import json
+import textwrap
+from pathlib import Path
 from typing import Dict, List, Optional, Set
-from testtailor.models import ExecutionPath
+from models import ExecutionPath
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -121,3 +125,69 @@ def collect_test_suite_traces(
         results[test_id] = path
 
     return results
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI entry point (manual verification)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Simple CLI for manually exercising the trace collector.
+
+    Example (order_management):
+      python -m execution.trace_collector \\
+        --target-file tests/order_management/service/order_service.py \\
+        --test-file tests/_cli_trace_order_test.py
+    """
+    parser = argparse.ArgumentParser(description="Manual runner for TraceCollector.")
+    parser.add_argument(
+        "--target-file",
+        required=True,
+        help="Path to the Python file whose execution we want to trace.",
+    )
+    parser.add_argument(
+        "--test-file",
+        help="Path to a Python file containing a unittest-style test.",
+    )
+    parser.add_argument(
+        "--test-source",
+        help="Inline test source string (if provided, overrides --test-file).",
+    )
+    parser.add_argument(
+        "--test-id",
+        default="cli_test",
+        help="Identifier used as test_id key in the result JSON.",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.test_source is not None:
+        test_src = textwrap.dedent(args.test_source)
+    elif args.test_file:
+        test_src = Path(args.test_file).read_text(encoding="utf-8")
+    else:
+        raise SystemExit("Must provide --test-source or --test-file")
+
+    test_sources = {args.test_id: test_src}
+    traces = collect_test_suite_traces(
+        test_sources=test_sources,
+        target_file=os.path.realpath(args.target_file),
+    )
+
+    # Convert ExecutionPath objects to a JSON-serialisable structure.
+    out: Dict[str, Dict[str, object]] = {}
+    for test_id, path in traces.items():
+        out[test_id] = {
+            "covered_lines": sorted(path.covered_lines),
+            "visited_nodes": path.visited_nodes,
+            "reached_function": bool(path.covered_lines),
+            "exception_info": path.exception_info,
+        }
+
+    print(json.dumps(out, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

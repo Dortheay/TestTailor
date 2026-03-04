@@ -25,13 +25,13 @@ testtailor/
 │   └── path_divergence.py     #   Locate first divergence point
 │
 ├── generation/                # ── STAGE 3: Iterative Coverage Improvement ──────
-│   ├── llm_client.py          #   OpenAI / DeepSeek API wrapper
+│   ├── llm_client.py          #   OpenAI / DeepSeek API wrapper ✅
 │   ├── prompt_builder.py      #   Assemble Figure-6 prompt from all components
 │   └── iterative_generator.py #   generate → execute → repair/refine loop
 │
 ├── execution/                 # ── Test Execution Infrastructure ────────────────
-│   ├── trace_collector.py     #   sys.settrace-based runtime path collector
-│   └── test_executor.py       #   Isolated subprocess runner + coverage measurement
+│   ├── trace_collector.py     #   sys.settrace-based runtime path collector ✅
+│   └── test_executor.py       #   Isolated subprocess runner + coverage measurement ✅
 │
 └── utils/
     └── coverage_utils.py      #   Statement / branch coverage helpers
