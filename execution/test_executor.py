@@ -18,10 +18,11 @@ import subprocess
 import tempfile
 import textwrap
 import json
+import argparse
 from pathlib import Path
-from typing import Optional, Set, Tuple
+from typing import Optional, Set, Tuple, List
 
-from testtailor.models import CodeUnit, GeneratedTest
+from models import CodeUnit, GeneratedTest
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ unit_end    = {unit_end!r}
 baseline_lines = set({baseline_lines!r})
 
 # Start coverage measurement
-cov = coverage.Coverage(source=[target_file], branch=False)
+cov = coverage.Coverage(source=[os.path.dirname(target_file)], branch=False)
 cov.start()
 
 result = {{
@@ -174,7 +175,7 @@ class TestExecutor:
                 result.compilation_error = data.get("compilation_error")
                 result.runtime_error = data.get("runtime_error")
                 result.executed = data.get("executed", False)
-                result.newly_covered_lines = set(data.get("newly_covered", []))
+                result.newly_covered_lines = set[int](data.get("newly_covered", []))
                 result.covers_target = data.get("covers_target", False)
                 result.reaches_function = data.get("reaches_function", False)
             else:
@@ -211,7 +212,7 @@ def measure_coverage(
     except ImportError:
         raise RuntimeError("coverage package required: pip install coverage")
 
-    cov = coverage_mod.Coverage(source=[target_file], branch=True)
+    cov = coverage_mod.Coverage(source=[os.path.dirname(target_file)], branch=True)
     cov.start()
 
     for test_id, source in test_suite_sources.items():
@@ -250,3 +251,169 @@ def measure_coverage(
         return stmt_cov, br_cov
     except Exception:
         return 0.0, 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI entry point (manual verification)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _resolve_unit_from_function(
+    target_file: str,
+    function: str,
+    unit_id: Optional[str] = None,
+) -> CodeUnit:
+    """
+    Create a CodeUnit spanning a function definition inside *target_file*.
+
+    Supported formats:
+    - "func_name" (top-level function)
+    - "ClassName.func_name" (method)
+    """
+    src = Path(target_file).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    class_name: Optional[str] = None
+    func_name = function
+    if "." in function:
+        class_name, func_name = function.split(".", 1)
+
+    node_found: Optional[ast.AST] = None
+    if class_name:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == func_name:
+                        node_found = item
+                        break
+    else:
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                node_found = node
+                break
+
+    if node_found is None or not isinstance(node_found, ast.FunctionDef):
+        raise ValueError(f"Could not find function '{function}' in {target_file}")
+
+    return CodeUnit(
+        unit_id=unit_id or function,
+        source_file=os.path.realpath(target_file),
+        function_name=func_name,
+        start_lineno=node_found.lineno,
+        end_lineno=node_found.end_lineno,
+        unit_type="linear",
+        code_snippet="",
+        ast_node=None,
+    )
+
+
+def _resolve_unit_from_lines(
+    target_file: str,
+    start: int,
+    end: int,
+    unit_id: str = "manual_unit",
+) -> CodeUnit:
+    return CodeUnit(
+        unit_id=unit_id,
+        source_file=os.path.realpath(target_file),
+        function_name=unit_id,
+        start_lineno=start,
+        end_lineno=end,
+        unit_type="linear",
+        code_snippet="",
+        ast_node=None,
+    )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Run a generated test against a target file and print results as JSON.
+
+    Example (order_management):
+      python -m execution.test_executor \\
+        --target-file tests/order_management/service/order_service.py \\
+        --function OrderService.create_order \\
+        --test-file tests/test_test_executor_order_management.py
+    """
+    parser = argparse.ArgumentParser(description="Manual runner for TestExecutor.")
+    parser.add_argument("--target-file", required=True, help="Path to Python file under test.")
+    parser.add_argument(
+        "--function",
+        help="Function to define the unit (func or Class.func). Preferred over --unit-lines.",
+    )
+    parser.add_argument(
+        "--unit-lines",
+        nargs=2,
+        type=int,
+        metavar=("START", "END"),
+        help="Manual unit line range (1-indexed), inclusive.",
+    )
+    parser.add_argument("--unit-id", default=None, help="Override CodeUnit.unit_id.")
+    parser.add_argument("--test-file", help="Path to a Python file containing the generated test.")
+    parser.add_argument(
+        "--test-source",
+        help="Inline test source string (if provided, overrides --test-file).",
+    )
+    parser.add_argument("--timeout", type=int, default=30, help="Subprocess timeout seconds.")
+    parser.add_argument(
+        "--baseline-covered",
+        default="",
+        help="Comma-separated covered line numbers for baseline diff (e.g., '10,11,12').",
+    )
+    parser.add_argument(
+        "--also-measure-coverage",
+        action="store_true",
+        help="Additionally run measure_coverage on the provided test source.",
+    )
+
+    args = parser.parse_args(argv)
+
+    target_file = os.path.realpath(args.target_file)
+    if args.test_source is not None:
+        test_source = textwrap.dedent(args.test_source)
+    elif args.test_file:
+        test_source = Path(args.test_file).read_text(encoding="utf-8")
+    else:
+        raise SystemExit("Must provide --test-source or --test-file")
+
+    baseline: Set[int] = set()
+    if args.baseline_covered.strip():
+        baseline = {int(x.strip()) for x in args.baseline_covered.split(",") if x.strip()}
+
+    if args.function:
+        unit = _resolve_unit_from_function(target_file, args.function, unit_id=args.unit_id)
+    elif args.unit_lines:
+        unit = _resolve_unit_from_lines(
+            target_file, start=args.unit_lines[0], end=args.unit_lines[1], unit_id=args.unit_id or "manual_unit"
+        )
+    else:
+        raise SystemExit("Must provide --function or --unit-lines START END")
+
+    executor = TestExecutor(target_file=target_file, timeout=args.timeout)
+    result = executor.execute(
+        generated_source=test_source,
+        unit=unit,
+        baseline_covered=baseline,
+        iteration=0,
+    )
+
+    payload = {
+        "unit_id": result.unit_id,
+        "executed": result.executed,
+        "compilation_error": result.compilation_error,
+        "runtime_error": result.runtime_error,
+        "newly_covered_lines": sorted(result.newly_covered_lines),
+        "covers_target": result.covers_target,
+        "reaches_function": result.reaches_function,
+    }
+
+    if args.also_measure_coverage:
+        stmt_cov, br_cov = measure_coverage(target_file=target_file, test_suite_sources={"cli_test": test_source})
+        payload["statement_coverage_pct"] = stmt_cov
+        payload["branch_coverage_pct"] = br_cov
+
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
