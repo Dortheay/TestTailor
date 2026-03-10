@@ -15,6 +15,8 @@ import textwrap
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 from models import ExecutionPath
+import unittest
+import io
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -91,42 +93,68 @@ class TraceCollector:
 # Collect traces for an existing test suite
 # ──────────────────────────────────────────────────────────────────────────────
 
+# trace_collector.py
+
 def collect_test_suite_traces(
     test_sources: Dict[str, str],   # test_id → Python source
     target_file: str,
 ) -> Dict[str, ExecutionPath]:
-    """
-    Execute each test case in *test_sources* in a fresh namespace and collect
-    its execution trace against *target_file*.
-
-    Returns
-    -------
-    dict mapping test_id → ExecutionPath
-    """
     results: Dict[str, ExecutionPath] = {}
+    target_file_abs = os.path.realpath(target_file)
+    original_argv = sys.argv[:]
+
+    print(f"\n{'='*20} Trace Collection Start {'='*20}")
 
     for test_id, source in test_sources.items():
-        collector = TraceCollector(target_file)
-        namespace: dict = {}
-        exception_info: Optional[str] = None
+        print(f"\n[Test Case: {test_id}]")
+        collector = TraceCollector(target_file_abs)
+        
+        namespace: dict = {
+            "__file__": target_file_abs,
+            "__name__": "__main__",
+        }
+        sys.argv = [original_argv[0], "-v"] 
 
         try:
-            # Compile and execute
             code = compile(source, f"<test:{test_id}>", "exec")
             with collector:
-                exec(code, namespace)
+                # Step 1: Execute code to define classes, separately catch SystemExit
+                try:
+                    exec(code, namespace)
+                except SystemExit:
+                    pass  # Ignore exit triggered by unittest.main(), continue execution
+                except Exception as exc:
+                    print(f"    [ERROR] Execution crashed: {type(exc).__name__}: {exc}")
+
+                # Step 2: Manually load and run tests (this will always execute)
+                loader = unittest.TestLoader()
+                suite = unittest.TestSuite()
+                for obj in namespace.values():
+                    if isinstance(obj, type) and issubclass(obj, unittest.TestCase):
+                        suite.addTests(loader.loadTestsFromTestCase(obj))
+                
+                if suite.countTestCases() > 0:
+                    runner = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0)
+                    runner.run(suite)
+                else:
+                    print(f"    [!] Warning: No test cases found in the namespace")
+
         except SystemExit:
-            pass  # tests calling sys.exit
+            pass 
         except Exception as exc:
-            exception_info = f"{type(exc).__name__}: {exc}"
+            print(f"    [ERROR] Execution crashed: {type(exc).__name__}: {exc}")
 
+        # 4. Retrieve the result and print the specific covered line numbers
         path = collector.get_path(test_id, source)
-        path.exception_info = exception_info
         results[test_id] = path
+        
+        covered_list = sorted(list(path.covered_lines))
+        print(f"    [SUCCESS] Covered lines count: {len(covered_list)}")
+        print(f"    [SUCCESS] Covered line numbers: {covered_list}")
 
+    sys.argv = original_argv
+    print(f"\n{'='*20} Trace Collection End {'='*20}\n")
     return results
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI entry point (manual verification)
 # ──────────────────────────────────────────────────────────────────────────────

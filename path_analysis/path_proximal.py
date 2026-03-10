@@ -1,218 +1,210 @@
-"""
-Path-Proximal Test Selector
-============================
-Implements Algorithm 1 from the paper:
+import os
+import argparse
+import json
+from typing import List, Set, Dict, Optional, Tuple
+from pathlib import Path
 
-    FindSeedTest(B_target, S_tests, G_CFG, T_Dom)
-
-The algorithm uses a hierarchical search over the dominator tree:
-  1. Sibling-level search : tests covering any sibling of the target node
-  2. Ancestor-level fallback : ascend to the parent and repeat
-
-Candidates at each level are ranked by Jaccard similarity between their
-runtime paths and the target path template.  Ties are broken by choosing
-the test whose suffix beyond the common prefix is shortest.
-"""
-
-import ast
-from typing import Dict, List, Optional, Set, Tuple
-
-from models import CodeUnit, ExecutionPath, PathProximalTest, TargetPath
-from path_analysis.cfg_builder import CFG, DominatorTree, build_cfg
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Jaccard helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _jaccard(a: Set[int], b: Set[int]) -> float:
-    if not a and not b:
-        return 1.0
-    union = a | b
-    if not union:
-        return 0.0
-    return len(a & b) / len(union)
-
-
-def _common_prefix_length(a: List[int], b: List[int]) -> int:
-    length = 0
-    for x, y in zip(a, b):
-        if x == y:
-            length += 1
-        else:
-            break
-    return length
-
-
-def _suffix_length_after_prefix(path: List[int], prefix_len: int) -> int:
-    return max(0, len(path) - prefix_len)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Selector
-# ──────────────────────────────────────────────────────────────────────────────
+# Import functionality from existing modules
+from models import CodeUnit, ExecutionPath
+from path_analysis.cfg_builder import build_cfg_from_file, CFG, DominatorTree
+from execution.trace_collector import collect_test_suite_traces
 
 class PathProximalSelector:
     """
-    Given a target CodeUnit and a collection of test execution paths,
-    find the most path-proximal test using Algorithm 1.
-
-    Parameters
-    ----------
-    cfg : CFG of the function containing the target unit
-    dom : Dominator tree of that CFG
-    target_path : TargetPath (structural path template)
+    Path-Nearest Selector: 
+    Uses a dominator-tree hierarchical search algorithm to locate the existing test that is closest to the target uncovered unit.
     """
 
-    def __init__(self, cfg: CFG, dom: DominatorTree, target_path: TargetPath):
-        self.cfg = cfg
-        self.dom = dom
-        self.target_path = target_path
-        self._target_node_id = self._find_target_node()
-        self._target_line_set = set(target_path.path_nodes)
+    def __init__(self, target_file: str, function_name: str):
+        self.target_file = os.path.realpath(target_file)
+        self.function_name = function_name
+        # 1. Build CFG and dominator tree
+        self.cfg, self.dom_tree = build_cfg_from_file(target_file, function_name)
 
-    def select(
-        self,
-        execution_paths: Dict[str, ExecutionPath],
-    ) -> Optional[PathProximalTest]:
+    def get_structural_skeleton(self, target_lineno: int) -> Set[int]:
         """
-        Run Algorithm 1 and return the most path-proximal test, or None.
-
-        Parameters
-        ----------
-        execution_paths : dict of test_id → ExecutionPath
+        Derive the structural path skeleton from the function entry to the target line 
+        (i.e., the set of line numbers corresponding to all mandatory nodes along the path).
         """
-        target_nid = self._target_node_id
-        if target_nid is None:
-            # Fallback: just pick the test with most line overlap
-            return self._global_fallback(execution_paths)
+        node = self.cfg.node_for_lineno(target_lineno)
+        if not node:
+            return set()
 
-        # ── Level 0: sibling search ──────────────────────────────────────
-        scope_nids = self.dom.get_siblings(target_nid)
-        current_scope = scope_nids
+        # Retrieve ancestor nodes in the dominator tree (all mandatory nodes that must be passed to reach this node)
+        ancestor_ids = self.dom_tree.ancestors(node.node_id)
+        
+        # Extract line numbers
+        skeleton_lines = {self.cfg.node(nid).lineno for nid in ancestor_ids 
+                          if self.cfg.node(nid).lineno is not None}
+        if node.lineno:
+            skeleton_lines.add(node.lineno)
+            
+        return skeleton_lines
 
-        while current_scope:
-            # Lines covered by nodes in the current scope
-            scope_lines = self._nodes_to_lines(current_scope)
-            candidates = self._find_covering_tests(scope_lines, execution_paths)
+    def calculate_jaccard(self, set_a: Set[int], set_b: Set[int]) -> float:
+        """Calculate Jaccard similarity"""
+        if not set_a or not set_b:
+            return 0.0
+        intersection = len(set_a.intersection(set_b))
+        union = len(set_a.union(set_b))
+        return intersection / union
 
-            if candidates:
-                return self._rank_candidates(candidates, execution_paths)
+    def select_best_test(
+        self, 
+        target_unit: CodeUnit, 
+        test_paths: Dict[str, ExecutionPath]
+    ) -> Optional[Tuple[str, float]]:
+        """
+        
+        """
+        print(f"\n[Start Search] Target Unit: {target_unit.unit_id} (Line: {target_unit.start_lineno})")
+        
+        target_node = self.cfg.node_for_lineno(target_unit.start_lineno)
+        if not target_node:
+            print(f"[!] Error: Cannot find node for line {target_unit.start_lineno} in CFG. Executing global fallback.")
+            return self._global_fallback(target_unit, test_paths)
 
-            # Ascend: get parent and its siblings
-            parent = self.dom.get_parent(
-                current_scope[0] if current_scope else target_nid
-            )
-            if parent is None:
+        target_skeleton = self.get_structural_skeleton(target_unit.start_lineno)
+        print(f"[*] Target Path Skeleton (Mandatory Lines): {sorted(list(target_skeleton))}")
+
+        current_node_id = target_node.node_id
+        level = 0
+
+        # Hierarchical search
+        while current_node_id is not None:
+            curr_node = self.cfg.node(current_node_id)
+            print(f"\n--- [Level {level}] Searching Node ID: {current_node_id} ({curr_node.node_type}) ---")
+
+            # 1. Find sibling nodes
+            siblings = self.dom_tree.get_siblings(current_node_id)
+            sibling_lines = {self.cfg.node(sid).lineno for sid in siblings 
+                             if self.cfg.node(sid).lineno is not None}
+            
+            print(f"  > Dominator tree sibling node IDs: {siblings}")
+            print(f"  > Line numbers associated with sibling nodes: {list(sibling_lines)}")
+
+            if not sibling_lines:
+                print(f"  > No valid sibling line numbers at this level. Skipping test matching.")
+            else:
+                # 2. Search candidate tests at the current level
+                candidates = {}
+                print(f"  > Scanning {len(test_paths)} test traces...")
+                
+                for test_id, path in test_paths.items():
+                    # Check whether the test covers any sibling node
+                    intersection = path.covered_lines.intersection(sibling_lines)
+                    if intersection:
+                        score = self.calculate_jaccard(target_skeleton, path.covered_lines)
+                        candidates[test_id] = score
+                        print(f"    [MATCH] Test '{test_id}' hits sibling lines {list(intersection)}, Jaccard: {score:.4f}")
+                    else:
+                        # Optional: print skipped information (can be commented out if too many tests)
+                        # print(f"    [SKIP] Test '{test_id}' does not hit sibling lines")
+                        pass
+
+                if candidates:
+                    best_id, best_score = max(candidates.items(), key=lambda x: x[1])
+                    print(f"\n[+] Best match found at Level {level}: {best_id} (Score: {best_score:.4f})")
+                    return best_id, best_score
+                else:
+                    print(f"  > No tests covering sibling nodes found at Level {level}.")
+
+            # 3. Move upward in the dominator tree
+            parent_id = self.dom_tree.get_parent(current_node_id)
+            if parent_id is not None and parent_id != current_node_id:
+                print(f"  > Backtracking upward: from node {current_node_id} to parent node {parent_id}")
+                current_node_id = parent_id
+                level += 1
+            else:
+                print(f"  > Reached the root of the dominator tree.")
                 break
-            current_scope = self.dom.get_siblings(parent) + [parent]
 
-        # ── Last resort: global fallback ────────────────────────────────
-        return self._global_fallback(execution_paths)
+        print(f"\n[*] Hierarchical search failed. Entering global similarity computation (Fallback)...")
+        return self._global_fallback(target_unit, test_paths)
 
-    # ── Internals ────────────────────────────────────────────────────────────
-
-    def _find_target_node(self) -> Optional[int]:
-        unit = self.target_path.unit
-        return self.cfg.lineno_to_node(unit.start_lineno)
-
-    def _nodes_to_lines(self, node_ids: List[int]) -> Set[int]:
-        lines: Set[int] = set()
-        for nid in node_ids:
-            node = self.cfg.nodes.get(nid)
-            if node and node.lineno is not None:
-                lines.add(node.lineno)
-        return lines
-
-    def _find_covering_tests(
-        self,
-        scope_lines: Set[int],
-        execution_paths: Dict[str, ExecutionPath],
-    ) -> List[str]:
-        """Return test IDs that cover at least one line in scope_lines."""
-        return [
-            tid for tid, ep in execution_paths.items()
-            if ep.covered_lines & scope_lines
-        ]
-
-    def _rank_candidates(
-        self,
-        candidate_ids: List[str],
-        execution_paths: Dict[str, ExecutionPath],
-    ) -> Optional[PathProximalTest]:
-        """
-        Rank by (Jaccard DESC, suffix_length ASC) and return the best.
-        """
-        target_lines = self._target_line_set
-        target_seq = self.target_path.path_nodes
-
-        best_tid: Optional[str] = None
-        best_sim: float = -1.0
-        best_suffix: int = 10 ** 9
-
-        for tid in candidate_ids:
-            ep = execution_paths[tid]
-            sim = _jaccard(ep.covered_lines, target_lines)
-            prefix_len = _common_prefix_length(ep.visited_nodes, target_seq)
-            suffix = _suffix_length_after_prefix(ep.visited_nodes, prefix_len)
-
-            if (sim > best_sim) or (sim == best_sim and suffix < best_suffix):
-                best_sim = sim
-                best_suffix = suffix
-                best_tid = tid
-
-        if best_tid is None:
+    def _global_fallback(self, target_unit, test_paths):
+        target_skeleton = self.get_structural_skeleton(target_unit.start_lineno)
+        print(f"[*] Performing global Jaccard similarity comparison...")
+        
+        results = []
+        for tid, p in test_paths.items():
+            score = self.calculate_jaccard(target_skeleton, p.covered_lines)
+            results.append((tid, score))
+            # print(f"    - {tid}: {score:.4f}")
+        
+        if not results:
             return None
+            
+        best = max(results, key=lambda x: x[1])
+        print(f"[+] Globally closest test: {best[0]} (Score: {best[1]:.4f})")
+        return best
 
-        ep = execution_paths[best_tid]
-        return PathProximalTest(
-            test_id=best_tid,
-            test_source=ep.test_source,
-            execution_path=ep,
-            jaccard_similarity=best_sim,
-        )
-
-    def _global_fallback(
-        self,
-        execution_paths: Dict[str, ExecutionPath],
-    ) -> Optional[PathProximalTest]:
-        """Fall back to the test with the most line-level overlap."""
-        if not execution_paths:
-            return None
-        target_lines = self._target_line_set
-        best = max(
-            execution_paths.items(),
-            key=lambda kv: _jaccard(kv[1].covered_lines, target_lines),
-        )
-        tid, ep = best
-        return PathProximalTest(
-            test_id=tid,
-            test_source=ep.test_source,
-            execution_path=ep,
-            jaccard_similarity=_jaccard(ep.covered_lines, target_lines),
-        )
-
+def load_tests_from_dir(tests_dir: str) -> Dict[str, str]:
+    """Load source code of all test files from a directory."""
+    test_suite = {}
+    dir_path = Path(tests_dir)
+    if not dir_path.exists():
+        return {}
+    for path in dir_path.glob("test_*.py"):
+        test_suite[path.stem] = path.read_text(encoding="utf-8")
+    return test_suite
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Convenience entry point
+# Main Function
 # ──────────────────────────────────────────────────────────────────────────────
 
-def find_path_proximal_test(
-    unit: CodeUnit,
-    target_path: TargetPath,
-    execution_paths: Dict[str, ExecutionPath],
-    func_node: ast.FunctionDef,
-) -> Optional[PathProximalTest]:
-    """
-    High-level entry point.
+def main():
+    parser = argparse.ArgumentParser(description="Path Proximal Selector CLI")
+    parser.add_argument("--target-file", required=True, help="Target source file path")
+    parser.add_argument("--func", required=True, help="Target function name")
+    parser.add_argument("--line", type=int, required=True, help="Line number of the uncovered target")
+    parser.add_argument("--tests-dir", required=True, help="Directory containing existing test cases")
+    
+    args = parser.parse_args()
 
-    Parameters
-    ----------
-    unit          : the uncovered target unit
-    target_path   : structural path template with constraints
-    execution_paths : dict of test_id → ExecutionPath (from TraceCollector)
-    func_node     : AST node of the enclosing function
-    """
-    cfg, dom = build_cfg(func_node)
-    selector = PathProximalSelector(cfg, dom, target_path)
-    return selector.select(execution_paths)
+    # 1. Construct CodeUnit
+    unit = CodeUnit(
+        unit_id=f"{args.func}:{args.line}",
+        source_file=args.target_file,
+        function_name=args.func,
+        start_lineno=args.line,
+        end_lineno=args.line,
+        unit_type="linear",
+        code_snippet=""
+    )
+
+    # 2. Collect execution traces from existing tests
+    print(f"[*] Loading tests from {args.tests_dir} and collecting execution traces...")
+    test_sources = load_tests_from_dir(args.tests_dir)
+    if not test_sources:
+        print(f"[-] No test_*.py files found in {args.tests_dir}")
+        return
+
+    traces = collect_test_suite_traces(test_sources, args.target_file)
+
+    # 3. Perform path proximity analysis
+    print(f"[*] Analyzing control flow structure of function {args.func}...")
+    selector = PathProximalSelector(args.target_file, args.func)
+    
+    # Retrieve target skeleton for display
+    skeleton = selector.get_structural_skeleton(args.line)
+    print(f"[+] Target path skeleton line numbers: {sorted(list(skeleton))}")
+
+    # Execute hierarchical search algorithm
+    result = selector.select_best_test(unit, traces)
+
+    if result:
+        test_id, score = result
+        covered_lines = sorted(list(traces[test_id].covered_lines))
+        print("\n" + "="*30)
+        print(f"Result: Closest test case found")
+        print(f"Test ID      : {test_id}")
+        print(f"Similarity   : {score:.4f}")
+        print(f"Covered lines: {len(covered_lines)}")
+        print(f"Line numbers : {covered_lines}")
+        print("="*30)
+    else:
+        print("\n[-] No related test case could be found.")
+
+if __name__ == "__main__":
+    main()

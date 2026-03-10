@@ -20,3 +20,8 @@ env/
 # TestTailor outputs
 testtailor_output/
 
+# Coverage files
+.coverage
+
+# Backup files or folders
+*backup*

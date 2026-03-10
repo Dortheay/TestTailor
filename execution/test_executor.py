@@ -74,7 +74,11 @@ except Exception as e:
     print(json.dumps(result))
     sys.exit(0)
 
-ns = {{}}
+ns = {{
+    "__file__": target_file,
+    "__name__": "__main__",
+    "__package__": None,
+}}
 try:
     exec(code, ns)
     # Run unittest test cases found in ns
