@@ -22,7 +22,7 @@ testtailor/
 │   ├── cfg_builder.py         #   Build CFG + Dominator Tree from AST ✅
 │   ├── symbolic_executor.py   #   Extract PathConstraints (loop hints, elif pruning) ✅
 │   ├── path_proximal.py       #   Algorithm 1 — find most path-proximal test ✅
-│   └── path_divergence.py     #   Locate first divergence point
+│   └── path_divergence.py     #   Locate first divergence point ✅
 │
 ├── generation/                # ── STAGE 3: Iterative Coverage Improvement ──────
 │   ├── llm_client.py          #   OpenAI / DeepSeek API wrapper ✅
