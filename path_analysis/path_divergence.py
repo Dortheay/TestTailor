@@ -11,37 +11,21 @@ The output is embedded into the LLM prompt as:
      Existing test path continues to: <what actually happened>"
 """
 
+import argparse
 import ast
-from typing import List, Optional, Set, Tuple
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-from models import (
-    CodeUnit, ExecutionPath, PathProximalTest, TargetPath
-)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _common_prefix(a: List[int], b: List[int]) -> List[int]:
-    prefix = []
-    for x, y in zip(a, b):
-        if x == y:
-            prefix.append(x)
-        else:
-            break
-    return prefix
-
-
-def _lines_around(source_lines: List[str], lineno: int, context: int = 2) -> str:
-    """Extract a few lines around *lineno* for display."""
-    start = max(0, lineno - 1 - context)
-    end = min(len(source_lines), lineno + context)
-    snippet_lines = []
-    for i, line in enumerate(source_lines[start:end], start=start + 1):
-        marker = ">>>" if i == lineno else "   "
-        snippet_lines.append(f"{marker} {i:4d}: {line.rstrip()}")
-    return "\n".join(snippet_lines)
+from models import CodeUnit, ExecutionPath, PathProximalTest, TargetPath
+from path_analysis.cfg_builder import build_cfg_from_file, CFG
+from path_analysis.symbolic_executor import SymbolicConstraintExtractor
+from execution.trace_collector import collect_test_suite_traces
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -52,12 +36,41 @@ class PathDivergenceAnalyzer:
     """
     Compares the execution path of a path-proximal test against the target
     path to locate the first divergence point.
+
+    Algorithm
+    ---------
+    Walk *target_path.path_nodes* in order.  For each mandatory node:
+      - If the proximal trace covers it → mark it as the *last shared node*.
+      - If the proximal trace does NOT cover it → this is the divergence point.
+
+    The output answers three questions:
+      1. Where does the path diverge?  (divergence_lineno / divergence_condition)
+      2. What does the target path do next?  (target_continues_to)
+      3. What does the proximal test do instead?  (proximal_continues_to)
     """
 
     def __init__(self, source: str):
         self.source = source
         self.source_lines = source.splitlines()
         self.tree = ast.parse(source)
+        # CFG node-type lookup built on demand (branch / loop_header labelling)
+        self._lineno_to_node_type: Dict[int, str] = {}
+
+    # ── Public API ───────────────────────────────────────────────────────────
+
+    def load_cfg(self, source_file: str, function_name: str) -> None:
+        """
+        Optionally load the CFG for the target function so that divergence
+        conditions can be prefixed with their structural type
+        (e.g. "[branch]", "[loop]").
+        """
+        try:
+            cfg, _ = build_cfg_from_file(source_file, function_name)
+            for node in cfg.nodes.values():
+                if node.lineno is not None:
+                    self._lineno_to_node_type[node.lineno] = node.node_type
+        except Exception:
+            pass  # CFG enrichment is optional; AST-only fallback is fine
 
     def analyze(
         self,
@@ -67,10 +80,17 @@ class PathDivergenceAnalyzer:
         """
         Annotate *proximal* with divergence information and return it.
         """
-        target_seq = target_path.path_nodes          # ordered decision lines
-        proximal_seq = proximal.execution_path.visited_nodes  # actual trace
+        # Load CFG for richer node labels when source_file is available
+        unit = target_path.unit
+        if unit.source_file and unit.function_name:
+            self.load_cfg(unit.source_file, unit.function_name)
 
-        div_lineno, div_condition = self._find_divergence(target_seq, proximal_seq)
+        target_seq = target_path.path_nodes           # ordered decision linenos
+        proximal_seq = proximal.execution_path.visited_nodes  # runtime trace
+
+        div_lineno, div_condition, last_shared = self._find_divergence(
+            target_seq, proximal_seq
+        )
 
         if div_lineno is not None:
             proximal.divergence_lineno = div_lineno
@@ -79,12 +99,11 @@ class PathDivergenceAnalyzer:
                 target_seq, div_lineno
             )
             proximal.proximal_continues_to = self._what_proximal_does_next(
-                proximal_seq, div_lineno
+                proximal_seq, last_shared
             )
         else:
-            # No divergence found in structural path – the test may reach the
-            # function but miss the unit for a different reason (e.g., the
-            # unit's lines are inside a loop iteration that isn't reached).
+            # All target nodes are covered but the unit is still not reached
+            # (e.g. the relevant loop iteration is never executed).
             proximal.divergence_condition = "(could not pinpoint divergence)"
             proximal.target_continues_to = (
                 f"line {target_path.unit.start_lineno} (target unit)"
@@ -99,40 +118,70 @@ class PathDivergenceAnalyzer:
         self,
         target_seq: List[int],
         proximal_seq: List[int],
-    ) -> Tuple[Optional[int], Optional[str]]:
+    ) -> Tuple[Optional[int], Optional[str], Optional[int]]:
         """
-        Walk both sequences in parallel and return (lineno, condition_text) at
-        the first point they differ.
+        Walk *target_seq* in order and return
+        ``(div_lineno, condition_text, last_shared_lineno)``.
 
-        Strategy
-        --------
-        We align on the *common prefix* (identical line numbers in order),
-        then the first element that appears in target_seq but NOT in the
-        proximal's subsequent visited lines is the divergence point.
+        *last_shared_lineno* is the last target-path node that the proximal
+        trace DID cover; it is used by ``_what_proximal_does_next`` to find
+        what the proximal test executes instead of going to the divergence point.
         """
-        proximal_set = set(proximal_seq)
-        target_set = set(target_seq)
+        proximal_covered = set(proximal_seq)
+        last_shared: Optional[int] = None
 
-        # The divergence is the first target node not covered by the proximal
         for lineno in target_seq:
-            if lineno not in proximal_set:
+            if lineno in proximal_covered:
+                last_shared = lineno
+            else:
                 cond = self._get_condition_at_line(lineno)
-                return lineno, cond
+                return lineno, cond, last_shared
 
-        # All target nodes are covered – divergence is at the unit itself
-        return None, None
+        # All target nodes are covered – no structural divergence found
+        return None, None, last_shared
 
     def _get_condition_at_line(self, lineno: int) -> str:
-        """Return the source text (condition or statement) at *lineno*."""
+        """
+        Return a concise description of the condition / statement at *lineno*.
+
+        For control-flow nodes (if / for / while) only the predicate is shown,
+        not the body.  An optional CFG-type prefix ("[branch]", "[loop]") is
+        prepended when the CFG has been loaded.
+        """
+        node_type = self._lineno_to_node_type.get(lineno, "")
+        prefix = ""
+        if node_type == "branch":
+            prefix = "[branch] "
+        elif node_type == "loop_header":
+            prefix = "[loop] "
+
         for node in ast.walk(self.tree):
-            if getattr(node, 'lineno', None) == lineno:
-                try:
-                    return ast.unparse(node)
-                except Exception:
-                    pass
-        # Fallback to raw source line
+            if getattr(node, "lineno", None) != lineno:
+                continue
+            try:
+                if isinstance(node, ast.If):
+                    return f"{prefix}if {ast.unparse(node.test)}"
+                if isinstance(node, (ast.For, ast.AsyncFor)):
+                    return (
+                        f"{prefix}for {ast.unparse(node.target)}"
+                        f" in {ast.unparse(node.iter)}"
+                    )
+                if isinstance(node, ast.While):
+                    return f"{prefix}while {ast.unparse(node.test)}"
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    args = ast.unparse(node.args)
+                    return f"{prefix}def {node.name}({args}):"
+                if isinstance(node, ast.ClassDef):
+                    return f"{prefix}class {node.name}:"
+                if isinstance(node, ast.Try):
+                    return f"{prefix}try: ..."
+                return f"{prefix}{ast.unparse(node)}"
+            except Exception:
+                pass
+
+        # Fallback: raw source line
         if 0 < lineno <= len(self.source_lines):
-            return self.source_lines[lineno - 1].strip()
+            return f"{prefix}{self.source_lines[lineno - 1].strip()}"
         return f"line {lineno}"
 
     def _what_target_does_next(
@@ -140,27 +189,43 @@ class PathDivergenceAnalyzer:
         target_seq: List[int],
         after_lineno: int,
     ) -> str:
-        """Return what the target path does after the divergence point."""
+        """Return what the target path expects to happen after *after_lineno*."""
         try:
             idx = target_seq.index(after_lineno)
             if idx + 1 < len(target_seq):
-                next_line = target_seq[idx + 1]
-                return self._get_condition_at_line(next_line)
+                return self._get_condition_at_line(target_seq[idx + 1])
         except ValueError:
             pass
-        return f"(continues toward target unit)"
+        return "(continues toward target unit)"
 
     def _what_proximal_does_next(
         self,
         proximal_seq: List[int],
-        after_lineno: int,
+        after_lineno: Optional[int],
     ) -> str:
-        """Return what the proximal test actually does instead."""
-        # Find after_lineno in the proximal sequence, then return next
+        """
+        Return what the proximal test actually executes after the last node it
+        shares with the target path (*after_lineno* = last_shared_lineno).
+
+        We look for the *last* occurrence of *after_lineno* in the trace (to
+        handle loops where the same line may appear multiple times) and then
+        return the immediately following line.
+        """
+        if after_lineno is None:
+            # Proximal trace shares no target-path node at all
+            if proximal_seq:
+                return self._get_condition_at_line(proximal_seq[0])
+            return "(different branch or skips entirely)"
+
+        # Find the last occurrence of after_lineno in the proximal trace
+        last_idx: Optional[int] = None
         for i, ln in enumerate(proximal_seq):
-            if ln == after_lineno and i + 1 < len(proximal_seq):
-                next_line = proximal_seq[i + 1]
-                return self._get_condition_at_line(next_line)
+            if ln == after_lineno:
+                last_idx = i
+
+        if last_idx is not None and last_idx + 1 < len(proximal_seq):
+            return self._get_condition_at_line(proximal_seq[last_idx + 1])
+
         return "(different branch or skips entirely)"
 
 
@@ -203,6 +268,134 @@ def analyze_divergence(
     target_path: TargetPath,
     source: str,
 ) -> PathProximalTest:
-    """High-level entry point."""
+    """High-level entry point used by the pipeline."""
     analyzer = PathDivergenceAnalyzer(source)
     return analyzer.analyze(proximal, target_path)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI / main
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Locate the first divergence point between a path-proximal test's "
+            "execution trace and the target path to a CodeUnit."
+        )
+    )
+    parser.add_argument(
+        "--target-file",
+        required=True,
+        help="Path to the Python source file containing the target function.",
+    )
+    parser.add_argument(
+        "--func",
+        required=True,
+        help="Name of the target function.",
+    )
+    parser.add_argument(
+        "--line",
+        type=int,
+        required=True,
+        help="Start line number of the uncovered target CodeUnit.",
+    )
+    parser.add_argument(
+        "--tests-dir",
+        required=True,
+        help="Directory containing existing test_*.py files.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    """
+    End-to-end CLI for manual testing of the divergence analysis pipeline.
+
+    Steps performed
+    ---------------
+    1. Read the target source file.
+    2. Build a TargetPath (with path_nodes + constraints) via SymbolicConstraintExtractor.
+    3. Collect runtime execution traces from all test_*.py files in --tests-dir.
+    4. Select the path-proximal test via PathProximalSelector.
+    5. Run PathDivergenceAnalyzer and print the result.
+
+    Example
+    -------
+        python -m path_analysis.path_divergence \\
+            --target-file tests/sample_target_v2.py \\
+            --func mixed_constructs \\
+            --line 33 \\
+            --tests-dir tests/order_management/tests/
+    """
+    args = _parse_args()
+
+    # ── 1. Read source ────────────────────────────────────────────────────────
+    target_file = os.path.realpath(args.target_file)
+    source = Path(target_file).read_text(encoding="utf-8")
+
+    # ── 2. Build CodeUnit + TargetPath ────────────────────────────────────────
+    unit = CodeUnit(
+        unit_id=f"{args.func}:{args.line}",
+        source_file=target_file,
+        function_name=args.func,
+        start_lineno=args.line,
+        end_lineno=args.line,
+        unit_type="linear",
+        code_snippet="",
+    )
+    extractor = SymbolicConstraintExtractor(source)
+    target_path = extractor.extract(unit)
+
+    print(f"[*] Target path nodes : {target_path.path_nodes}")
+    print(f"[*] Path constraints  : {[c.condition for c in target_path.constraints]}")
+
+    # ── 3. Collect execution traces ───────────────────────────────────────────
+    tests_dir = Path(args.tests_dir)
+    test_sources: Dict[str, str] = {
+        p.stem: p.read_text(encoding="utf-8")
+        for p in tests_dir.glob("test_*.py")
+    }
+    if not test_sources:
+        print(f"[-] No test_*.py files found in {args.tests_dir}")
+        return
+
+    print(f"\n[*] Collecting traces for {len(test_sources)} test file(s)...")
+    traces = collect_test_suite_traces(test_sources, target_file)
+
+    # ── 4. Select path-proximal test ──────────────────────────────────────────
+    from path_analysis.path_proximal import PathProximalSelector
+
+    selector = PathProximalSelector(target_file, args.func)
+    result = selector.select_best_test(unit, traces)
+
+    if result is None:
+        print("[-] No path-proximal test found.")
+        return
+
+    best_id, score = result
+    best_trace = traces[best_id]
+    proximal = PathProximalTest(
+        test_id=best_id,
+        test_source=best_trace.test_source,
+        execution_path=best_trace,
+        jaccard_similarity=score,
+    )
+
+    # ── 5. Analyze divergence ─────────────────────────────────────────────────
+    analyzer = PathDivergenceAnalyzer(source)
+    proximal = analyzer.analyze(proximal, target_path)
+
+    # ── 6. Display results ────────────────────────────────────────────────────
+    print("\n" + "=" * 55)
+    print(
+        f"Path-Proximal Test : {proximal.test_id}"
+        f"  (Jaccard: {proximal.jaccard_similarity:.4f})"
+    )
+    print("=" * 55)
+    print(format_divergence(proximal))
+    print("=" * 55)
+
+
+if __name__ == "__main__":
+    main()
