@@ -234,29 +234,19 @@ class PathDivergenceAnalyzer:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def format_divergence(proximal: PathProximalTest) -> str:
-    """Render the divergence info as a human-readable block for the LLM prompt."""
-    lines = ["Path Divergence Analysis"]
-    lines.append("-" * 40)
-
+    """Render the divergence info as the three-line block used in the LLM prompt."""
     if proximal.divergence_lineno:
-        lines.append(
-            f"The existing test case diverges at:\n"
-            f"    {proximal.divergence_condition} "
-            f"(line {proximal.divergence_lineno})"
+        div_at = (
+            f"{proximal.divergence_condition} (line {proximal.divergence_lineno})"
         )
     else:
-        lines.append(
-            f"The existing test case diverges at:\n"
-            f"    {proximal.divergence_condition}"
-        )
+        div_at = proximal.divergence_condition or "(could not pinpoint divergence)"
 
-    lines.append(
-        f"\nTarget path continues to:\n    {proximal.target_continues_to}"
+    return (
+        f"The existing test case diverges from the target path at:  {div_at}\n"
+        f"Target path continues to:  {proximal.target_continues_to}\n"
+        f"But existing test path continues to: {proximal.proximal_continues_to}"
     )
-    lines.append(
-        f"\nExisting test path continues to:\n    {proximal.proximal_continues_to}"
-    )
-    return "\n".join(lines)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

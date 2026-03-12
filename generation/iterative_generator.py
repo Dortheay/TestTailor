@@ -112,14 +112,16 @@ class IterativeGenerator:
             if result.compilation_error:
                 logger.info("  ✗ Compilation error – building repair prompt")
                 current_prompt = build_repair_prompt(
-                    current_prompt, raw_code, result.compilation_error
+                    current_prompt, raw_code, result.compilation_error,
+                    error_type="compilation",
                 )
                 continue
 
             if result.runtime_error:
                 logger.info("  ✗ Runtime error – building repair prompt")
                 current_prompt = build_repair_prompt(
-                    current_prompt, raw_code, result.runtime_error
+                    current_prompt, raw_code, result.runtime_error,
+                    error_type="runtime",
                 )
                 continue
 

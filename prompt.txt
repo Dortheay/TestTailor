@@ -1,0 +1,90 @@
+**Function under Test**
+def create_order(self, customer_name: str, amount: float):
+    order_id = generate_id()
+    order = Order(order_id, customer_name, amount)
+    self.order_repository.save(order)
+
+**Relevant Information from the entire project**
+class OrderService:
+
+    def __init__(self):
+        self.order_repository = OrderRepository()
+
+    def create_order(self, customer_name: str, amount: float):
+        order_id = generate_id()
+        order = Order(order_id, customer_name, amount)
+        self.order_repository.save(order)
+
+    def get_all_orders(self):
+        return self.order_repository.find_all()
+
+# From utils.id_generator
+def generate_id():
+    return next(_counter)
+
+# From model.order
+class Order:
+
+    def __init__(self, order_id: int, customer_name: str, amount: float):
+        self.order_id = order_id
+        self.customer_name = customer_name
+        self.amount = amount
+
+    def __str__(self):
+        return f"Order(id={self.order_id}, customer='{self.customer_name}', amount={self.amount})"
+
+**The Target code unit you need to cover**
+order = Order(order_id, customer_name, amount)
+
+To reach the target code, the test case needs to satisfy conditions along the path:
+(no additional path constraints)
+
+**The most Path-Similar test case**
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ORDER_MGMT_DIR = Path(__file__).resolve().parents[1]
+if str(ORDER_MGMT_DIR) not in sys.path:
+    sys.path.insert(0, str(ORDER_MGMT_DIR))
+from service.order_service import OrderService
+# 设置路径以确保可以导入 service 模块
+class TestOrderServiceBasic(unittest.TestCase):
+    def test_create_order_interaction(self):
+        service = OrderService()
+        customer_name = "Alice"
+        amount = 100.0
+        fixed_id = 999
+
+        # Mock generate_id 以确保测试的可预测性
+        with mock.patch("service.order_service.generate_id", return_value=fixed_id):
+            service.create_order(customer_name, amount)
+
+        # 验证订单是否已保存且属性正确
+        orders = service.get_all_orders()
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0].order_id, fixed_id)
+        self.assertEqual(orders[0].customer_name, customer_name)
+        self.assertEqual(orders[0].amount, amount)
+
+if __name__ == "__main__":
+    unittest.main()
+
+**Path Divergence Analysis**
+The existing test case diverges from the target path at:  (could not pinpoint divergence)
+Target path continues to:  line 13 (target unit)
+But existing test path continues to: (test did not reach this line)
+
+**Your task**
+Create a test case that targets the branch containing our target code.
+Use the reference test case as guidance and complete the function body only.
+** Important: Only provide the completed test case starting from "class Test" line. Do not include import statements. **
+```python
+# necessary import statements
+class Test(unittest.TestCase):
+    @timeout_decorator.timeout(1)
+    def test_case_XX(self):
+        """complete the test case here"""
+        ...
+```

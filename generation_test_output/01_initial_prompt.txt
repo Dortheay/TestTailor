@@ -1,0 +1,61 @@
+**Function under Test**
+def nested_branch(n):
+    if n > 10:
+        if n % 2 == 0:
+            return "big even"
+        else:
+            return "big odd"
+    else:
+        return "small"
+
+**Relevant Information from the entire project**
+(no additional dependencies)
+
+**The Target code unit you need to cover**
+return "big even"
+
+To reach the target code, the test case needs to satisfy conditions along the path:
+  - Condition must be True: n > 10
+  - Condition must be True: n % 2 == 0
+
+**The most Path-Similar test case**
+import sys
+import unittest
+from pathlib import Path
+
+# Make sample_target_v2 importable
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from sample_target_v2 import nested_branch
+
+
+class TestNestedBranchSmall(unittest.TestCase):
+    """Covers only the 'small' (n <= 10) branch."""
+
+    def test_small_value(self):
+        self.assertEqual(nested_branch(5), "small")
+
+    def test_boundary_small(self):
+        self.assertEqual(nested_branch(10), "small")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+**Path Divergence Analysis**
+The existing test case diverges from the target path at:  [branch] if n % 2 == 0 (line 17)
+Target path continues to:  return 'big even'
+But existing test path continues to: return 'small'
+
+**Your task**
+Create a test case that targets the branch containing our target code.
+Use the reference test case as guidance and complete the function body only.
+** Important: Only provide the completed test case starting from "class Test" line. Do not include import statements. **
+```python
+# necessary import statements
+class Test(unittest.TestCase):
+    @timeout_decorator.timeout(1)
+    def test_case_XX(self):
+        """complete the test case here"""
+        ...
+```
