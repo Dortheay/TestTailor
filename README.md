@@ -47,3 +47,9 @@ Arguments:
 - `--output`: output directory (default `testtailor_output/`)
 
 Generated tests are written to `<output>/generated_tests.py`.
+
+
+## Tips
+- [CODAMOSA Benchmark](https://github.com/microsoft/codamosa-dataset)
+- The project code has been fully refactored.
+- [Experimental Data](https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=drive_link)
