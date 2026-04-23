@@ -51,5 +51,5 @@ Generated tests are written to `<output>/generated_tests.py`.
 
 ## Tips
 - [CODAMOSA Benchmark](https://github.com/microsoft/codamosa-dataset)
-- The project code has been fully refactored.
-- [Experimental Data](https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=drive_link)
+- Note: The code has been refactored from an earlier research prototype; the core algorithm and experimental behavior remain consistent with the paper. 
+- The replication package of TestTailor, together with the experimental data used in our evaluation, is publicly available at: [Experimental Data](https://drive.google.com/drive/folders/1qOk1eci-FWaScBsWI6rgaBGDTe2QMQXh?usp=drive_link)
