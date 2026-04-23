@@ -123,9 +123,10 @@ class TestExecutor:
     Runs a generated test in a subprocess and returns evaluation results.
     """
 
-    def __init__(self, target_file: str, timeout: int = 30):
+    def __init__(self, target_file: str, timeout: int = 30, project_root: str = None):
         self.target_file = os.path.realpath(target_file)
         self.timeout = timeout
+        self.project_root = os.path.realpath(project_root) if project_root else None
 
     def execute(
         self,
@@ -171,7 +172,16 @@ class TestExecutor:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
-                env={**os.environ, "PYTHONPATH": str(Path(self.target_file).parent.parent)},
+                env={
+                    **os.environ,
+                    "PYTHONPATH": os.pathsep.join(
+                        p for p in [
+                            os.environ.get("PYTHONPATH", ""),
+                            self.project_root or "",
+                            str(Path(self.target_file).parent.parent),
+                        ] if p
+                    ),
+                },
             )
             stdout = proc.stdout.strip()
             if stdout:
@@ -184,7 +194,10 @@ class TestExecutor:
                 result.reaches_function = data.get("reaches_function", False)
             else:
                 result.runtime_error = (
-                    f"Runner produced no output. stderr:\n{proc.stderr[:500]}"
+                    f"Runner produced no output.\n"
+                    f"returncode={proc.returncode}\n"
+                    f"stderr (full):\n{proc.stderr}\n"
+                    f"stdout (raw):\n{proc.stdout}"
                 )
         except subprocess.TimeoutExpired:
             result.runtime_error = f"Test timed out after {self.timeout}s"

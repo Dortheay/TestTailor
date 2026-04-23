@@ -85,6 +85,18 @@ class LLMClient:
                 out_tok = resp.usage.completion_tokens if resp.usage else 0
                 cost = self._estimate_cost(in_tok, out_tok)
                 self._total_cost += cost
+                try:
+                    import logging
+                    logging.getLogger("testtailor").info(
+                        "[LLM response] call #%d model=%s tokens=%d/%d cost=$%.4f\n"
+                        "----- PROMPT (last 400 chars) -----\n%s\n"
+                        "----- RESPONSE -----\n%s\n"
+                        "----- END RESPONSE -----",
+                        self._call_count, self.config.llm_model, in_tok, out_tok, cost,
+                        prompt[-400:], content,
+                    )
+                except Exception:
+                    pass
                 return LLMResponse(
                     content=content,
                     prompt_tokens=in_tok,

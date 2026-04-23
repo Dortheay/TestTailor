@@ -111,6 +111,7 @@ class IterativeGenerator:
 
             if result.compilation_error:
                 logger.info("  ✗ Compilation error – building repair prompt")
+                logger.info("  >> compilation_error detail:\n%s", result.compilation_error)
                 current_prompt = build_repair_prompt(
                     current_prompt, raw_code, result.compilation_error,
                     error_type="compilation",
@@ -119,6 +120,8 @@ class IterativeGenerator:
 
             if result.runtime_error:
                 logger.info("  ✗ Runtime error – building repair prompt")
+                logger.info("  >> runtime_error detail:\n%s", result.runtime_error)
+                logger.info("  >> generated test source:\n%s", raw_code)
                 current_prompt = build_repair_prompt(
                     current_prompt, raw_code, result.runtime_error,
                     error_type="runtime",
@@ -183,7 +186,9 @@ class ModuleOrchestrator:
         self.project_root = project_root
         self.source = open(source_file, encoding="utf-8").read()
         self.executor = TestExecutor(
-            source_file, timeout=config.test_timeout_seconds
+            source_file,
+            timeout=config.test_timeout_seconds,
+            project_root=project_root,
         )
         self.generator = IterativeGenerator(
             config, llm_client, self.executor, self.source

@@ -20,6 +20,7 @@ env/
 # TestTailor outputs
 testtailor_output/
 memory/
+tests/
 
 # Coverage files
 .coverage

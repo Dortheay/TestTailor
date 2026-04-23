@@ -282,7 +282,7 @@ def _parse_args() -> argparse.Namespace:
                    help="LLM model (e.g. gpt-4o-2024-11-20 or deepseek-v3)")
     p.add_argument("--api-key",  default=None,
                    help="API key (or set OPENAI_API_KEY env var)")
-    p.add_argument("--api-base", default=None,
+    p.add_argument("--api-base", default="https://yunwu.ai/v1",
                    help="Custom API base URL (for DeepSeek etc.)")
     p.add_argument("--max-iter", type=int, default=3,
                    help="Max repair iterations per unit (default 3)")

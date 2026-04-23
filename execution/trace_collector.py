@@ -19,6 +19,57 @@ import unittest
 import io
 
 
+def _run_with_pytest(test_id: str, collector: "TraceCollector", target_file_abs: str):
+    """
+    Run a pytest-style test file (top-level test_* functions, fixtures from conftest)
+    while the given TraceCollector is active. Works by registering a small pytest
+    plugin that re-installs the collector's trace function around each test item.
+    """
+    try:
+        import pytest
+    except ImportError:
+        print(f"    [!] pytest not installed, cannot run {test_id}")
+        return
+
+    if not (os.path.isfile(test_id) and test_id.endswith(".py")):
+        print(f"    [!] pytest fallback needs a file path as test_id, got {test_id}")
+        return
+
+    trace_fn = collector._trace_calls
+
+    class _TraceWrapPlugin:
+        def pytest_runtest_call(self, item):
+            sys.settrace(trace_fn)
+            try:
+                item.runtest()
+            finally:
+                sys.settrace(None)
+
+        def pytest_runtest_protocol(self, item, nextitem):
+            return None  # let default protocol run
+
+    # Ensure conftest.py in the same dir is picked up automatically by pytest.
+    argv = [
+        test_id,
+        "-p", "no:cacheprovider",
+        "--tb=no",
+        "-q",
+        "--no-header",
+        "-x",
+        "--disable-warnings",
+    ]
+    try:
+        # Temporarily drop settrace during pytest startup (collection/import);
+        # the plugin re-enables it around each test call.
+        sys.settrace(None)
+        rc = pytest.main(argv, plugins=[_TraceWrapPlugin()])
+        print(f"    [pytest] finished with exit code {rc}")
+    except Exception as exc:
+        print(f"    [pytest] crashed: {type(exc).__name__}: {exc}")
+    finally:
+        sys.settrace(trace_fn)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Trace collector
 # ──────────────────────────────────────────────────────────────────────────────
@@ -137,7 +188,9 @@ def collect_test_suite_traces(
                     runner = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0)
                     runner.run(suite)
                 else:
-                    print(f"    [!] Warning: No test cases found in the namespace")
+                    # Fallback: pytest-style file (top-level test_* functions / fixtures)
+                    print(f"    [*] No unittest.TestCase found; falling back to pytest runner")
+                    _run_with_pytest(test_id, collector, target_file_abs)
 
         except SystemExit:
             pass 

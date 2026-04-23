@@ -103,8 +103,29 @@ class PathProximalSelector:
                         pass
 
                 if candidates:
-                    best_id, best_score = max(candidates.items(), key=lambda x: x[1])
-                    print(f"\n[+] Best match found at Level {level}: {best_id} (Score: {best_score:.4f})")
+                    # Algorithm 1 tie-break: among candidates with equal Jaccard,
+                    # pick the one whose execution path has the SHORTEST suffix
+                    # after the target skeleton (i.e., least extra divergent work).
+                    def _suffix_len(tid: str) -> int:
+                        ep = test_paths[tid]
+                        visited = list(ep.visited_nodes) if ep.visited_nodes else sorted(ep.covered_lines)
+                        # suffix = lines executed after the last line that is in target_skeleton
+                        last_idx = -1
+                        for i, ln in enumerate(visited):
+                            if ln in target_skeleton:
+                                last_idx = i
+                        if last_idx < 0:
+                            return len(visited)
+                        return len(visited) - last_idx - 1
+
+                    best_id, best_score = max(
+                        candidates.items(),
+                        key=lambda x: (x[1], -_suffix_len(x[0])),
+                    )
+                    print(
+                        f"\n[+] Best match found at Level {level}: {best_id} "
+                        f"(Jaccard: {best_score:.4f}, suffix_len: {_suffix_len(best_id)})"
+                    )
                     return best_id, best_score
                 else:
                     print(f"  > No tests covering sibling nodes found at Level {level}.")
@@ -125,19 +146,25 @@ class PathProximalSelector:
     def _global_fallback(self, target_unit, test_paths):
         target_skeleton = self.get_structural_skeleton(target_unit.start_lineno)
         print(f"[*] Performing global Jaccard similarity comparison...")
-        
+
         results = []
         for tid, p in test_paths.items():
             score = self.calculate_jaccard(target_skeleton, p.covered_lines)
-            results.append((tid, score))
-            # print(f"    - {tid}: {score:.4f}")
-        
+            visited = list(p.visited_nodes) if p.visited_nodes else sorted(p.covered_lines)
+            last_idx = -1
+            for i, ln in enumerate(visited):
+                if ln in target_skeleton:
+                    last_idx = i
+            suffix_len = (len(visited) - last_idx - 1) if last_idx >= 0 else len(visited)
+            results.append((tid, score, suffix_len))
+
         if not results:
             return None
-            
-        best = max(results, key=lambda x: x[1])
-        print(f"[+] Globally closest test: {best[0]} (Score: {best[1]:.4f})")
-        return best
+
+        # Primary: max Jaccard; tie-break: min suffix length (Algorithm 1)
+        best = max(results, key=lambda x: (x[1], -x[2]))
+        print(f"[+] Globally closest test: {best[0]} (Score: {best[1]:.4f}, suffix: {best[2]})")
+        return best[0], best[1]
 
 def load_tests_from_dir(tests_dir: str) -> Dict[str, str]:
     """Load source code of all test files from a directory."""
@@ -148,6 +175,32 @@ def load_tests_from_dir(tests_dir: str) -> Dict[str, str]:
     for path in dir_path.glob("test_*.py"):
         test_suite[path.stem] = path.read_text(encoding="utf-8")
     return test_suite
+
+def find_path_proximal_test(unit, target_path, execution_paths, func_node=None):
+    """
+    Public entry used by main.py (Algorithm 1).
+
+    Returns a PathProximalTest or None.
+    """
+    from models import PathProximalTest
+    try:
+        selector = PathProximalSelector(unit.source_file, unit.function_name)
+    except Exception as e:
+        print(f"[find_path_proximal_test] selector init failed: {e}")
+        return None
+    result = selector.select_best_test(unit, execution_paths)
+    if not result:
+        return None
+    test_id, score = result
+    ep = execution_paths.get(test_id)
+    if ep is None:
+        return None
+    return PathProximalTest(
+        test_id=test_id,
+        test_source=ep.test_source,
+        execution_path=ep,
+        jaccard_similarity=score,
+    )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Main Function
